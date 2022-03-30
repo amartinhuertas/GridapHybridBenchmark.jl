@@ -31,90 +31,56 @@ function jobdict(params)
   "name" => jobname(fparams),
   "nc" => nc,
   "numrefs" => haskey(params,:numrefs) ? params[:numrefs] : -1,
-  "mesh" => params[:mesh],
-  "solver" => params[:solver],
   "n" => prod(np),
   "np" => np,
   "nr" => nr,
   "projectdir" => driverdir(),
   "modules" => driverdir("modules.sh"),
   "title" => datadir(jobname(fparams)),
-  "sysimage" => driverdir("GridapDistributedBenchmark.so")
+  "sysimage" => driverdir("GridaHybridBenchmark.so")
   )
 end
 
-function generate_2d_dicts(mesh,solver,lst_nodes,lst_ls,nr=10)
+function generate_2d_dicts(lst_nodes,lst_ls,nr=10)
    dicts = Dict[]
    d=2
    for node in lst_nodes
      px=6*node
      py=8*node
      for ls in lst_ls
-       if (mesh==:cartesian)
-          nx=px*ls
-          ny=py*ls
-          aux=Dict(:d=>2,
-                   :nc=>(nx,ny),
-                   :np=>(px,py),
-                   :mesh=>:cartesian,
-                   :solver=>solver,
-                   :nr=>nr)
-          push!(dicts,aux)
-       else
-          nx=px*(2^ls)
-          ny=py*(2^ls)
-          aux=Dict(:d=>2,
-                   :numrefs=>ls,
-                   :nc=>(nx,ny),
-                   :np=>(px,py),
-                   :mesh=>:p4est,
-                   :solver=>solver,
-                   :nr=>nr)
-          push!(dicts,aux)
-       end
+        nx=px*ls
+        ny=py*ls
+        aux=Dict(:d=>2,
+                  :nc=>(nx,ny),
+                  :np=>(px,py),
+                  :nr=>nr)
+        push!(dicts,aux)
      end
    end
    dicts
 end
 
-function generate_3d_dicts(mesh,solver,lst_nodes,lst_ls,nr=10)
+function generate_3d_dicts(lst_nodes,lst_ls,nr=10)
   d=3
   for node in lst_nodes
     px=4*node
     py=4*node
     pz=3*node
     for ls in lst_ls
-      if (mesh==:cartesian)
-        nx=px*ls
-        ny=py*ls
-        nz=pz*ls
-        aux=Dict(:d=>3,
-                 :nc=>(nx,ny,nz),
-                 :np=>(px,py,pz),
-                 :mesh=>:cartesian,
-                 :solver=>solver,
-                 :nr=>nr)
-        push!(dicts,aux)
-      else
-        nx=px*(2^ls)
-        ny=py*(2^ls)
-        nz=pz*(2^ls)
-        aux=Dict(:d=>3,
-                 :numrefs=>ls,
-                 :nc=>(nx,ny,nz),
-                 :np=>(px,py,pz),
-                 :mesh=>:p4est,
-                 :solver=>solver,
-                 :nr=>nr)
-      end
+      nx=px*ls
+      ny=py*ls
+      nz=pz*ls
+      aux=Dict(:d=>3,
+                :nc=>(nx,ny,nz),
+                :np=>(px,py,pz),
+                :nr=>nr)
+      push!(dicts,aux)
     end
   end
   dicts
 end
 
-dicts_cartesian=generate_2d_dicts(:cartesian,:gamg,collect(3:8),[16,32,64,128,256,512])
-dicts=generate_2d_dicts(:p4est,:gamg,collect(3:8),collect(4:9))
-append!(dicts,dicts_cartesian)
+dicts=generate_2d_dicts(collect(3:8),[16,32,64,128,256,512])
 template = read(projectdir("jobtemplate.sh"),String)
 for params in dicts
    fparams=convert_nc_np_to_prod(params)

@@ -8,7 +8,7 @@
 #PBS -l wd
 #PBS -o {{{o}}}
 #PBS -e {{{e}}} 
-#PBS -l software=GridapDistributed.jl
+#PBS -l software=GridapHybrid.jl
 
 PERIOD=0.1
 top -b -d $PERIOD -u am6349 > {{{title}}}.log &
@@ -17,5 +17,5 @@ source {{{modules}}}
 
 $HOME/.julia/bin/mpiexecjl --project={{{projectdir}}} -n {{n}}\
     julia -J {{{sysimage}}} -O3 --check-bounds=no -e\
-      'using GridapDistributedBenchmark; GridapDistributedBenchmark.main(mesh=:{{mesh}},solver=:{{solver}},nc={{nc}},np={{np}},numrefs={{numrefs}},nr={{nr}},title="{{{title}}}")'
+      'using GridapHybridBenchmark; GridapHybridBenchmark.main(nc={{nc}},np={{np}},numrefs={{numrefs}},nr={{nr}},title="{{{title}}}")'
 

@@ -1,5 +1,5 @@
 module load openmpi
-export PATH=$HOME/julia-1.6.3/bin:$PATH
+export PATH=$HOME/julia-1.7.0/bin:$PATH
 export JULIA_MPI_BINARY=system
 export JULIA_MPI_PATH=/apps/openmpi/4.1.0
 export JULIA_PETSC_LIBRARY="$HOME/petsc-install/lib/libpetsc"

@@ -186,4 +186,6 @@ function main(;
   end
 end
 
+main(;np=(1,1),nr=1,title="test",nc=(10,10))
+
 end

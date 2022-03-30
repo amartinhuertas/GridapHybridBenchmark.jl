@@ -147,7 +147,6 @@ function main_cartesian(parts,subdomains,partition,title,ir,order=1)
     out = Dict{String,Any}()
     merge!(out,data)
     out["d"] = length(subdomains)
-    out["mesh"] = "cartesian"
     out["enorm"] = enorm
     out["nparts"] = nparts
     out["ngdofs"] = ngdofs

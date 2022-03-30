@@ -1,1 +1,1 @@
-# GridapDistributedBenchmark.jl
+# GridapHybridBenchmark.jl

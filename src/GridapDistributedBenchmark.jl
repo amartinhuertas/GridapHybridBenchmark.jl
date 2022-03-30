@@ -1,6 +1,7 @@
-module GridapDistributedBenchmark
+module GridapHybridBenchmark
 
 using Gridap
+using GridapHybrid
 using GridapDistributed
 using GridapPETSc
 using GridapP4est
@@ -20,58 +21,104 @@ function petsc_gamg_options()
   """
 end
 
+u(x) = VectorValue(1+x[1],1+x[2])
+Gridap.divergence(::typeof(u)) = (x) -> 2
+p(x) = -3.14
+∇p(x) = VectorValue(0,0)
+Gridap.∇(::typeof(p)) = ∇p
+f(x) = u(x) + ∇p(x)
+# Normal component of u(x) on Neumann boundary
+function g(x)
+  tol=1.0e-14
+  if (abs(x[2])<tol)
+    return -x[2] #-x[1]-x[2]
+  elseif (abs(x[2]-1.0)<tol)
+    return x[2] # x[1]+x[2]
+  end
+  Gridap.Helpers.@check false
+end
+
 function mytic!(t,comm)
   MPI.Barrier(comm)
   PArrays.tic!(t)
 end
 
 function _from_setup_fe_space_to_the_end(t,model,order=1)
-  # Manufactured solution
-  u(x) = x[1] + x[2]
-  f(x) = -Δ(u,x)
 
   comm = model.models.comm
 
+  D = num_cell_dims(model)
+  Ω = Triangulation(ReferenceFE{D},model)
+  Γ = Triangulation(ReferenceFE{D-1},model)
+  ∂K = GridapHybrid.Skeleton(model)
+
+
+  # FE formulation params
+  τ = 1.0 # HDG stab parameter
+
+  degree = 2*order+1
+  dΩ     = Measure(Ω,degree)
+  n      = get_cell_normal_vector(∂K)
+  nₒ     = get_cell_owner_normal_vector(∂K)
+  d∂K    = Measure(∂K,degree)
+
   # FESpaces
   mytic!(t,comm)
-  reffe = ReferenceFE(lagrangian,Float64,order)
-  V = TestFESpace(model,reffe,dirichlet_tags="boundary")
-  U = TrialFESpace(V, u)
-  PArrays.toc!(t,"FESpaces")
+  # Reference FEs
+  reffeᵤ = ReferenceFE(lagrangian,VectorValue{D,Float64},order;space=:P)
+  reffeₚ = ReferenceFE(lagrangian,Float64,order-1;space=:P)
+  reffeₗ = ReferenceFE(lagrangian,Float64,order;space=:P)
 
-  trian=Triangulation(model)
-  dΩ=Measure(trian,2*(order+1))
-  function a(u,v)
-    ∫(∇(v)⋅∇(u))dΩ
-  end
-  function l(v)
-    ∫(v*f)dΩ
-  end
+  # Define test FESpaces
+  V = TestFESpace(Ω  , reffeᵤ; conformity=:L2)
+  Q = TestFESpace(Ω  , reffeₚ; conformity=:L2)
+  M = TestFESpace(Γ,
+                  reffeₗ;
+                  conformity=:L2,
+                  dirichlet_tags=collect(5:8))
+  Y = MultiFieldFESpace([V,Q,M])
+
+  # Define trial FEspaces
+  U = TrialFESpace(V)
+  P = TrialFESpace(Q)
+  L = TrialFESpace(M,p)
+  X = MultiFieldFESpace([U, P, L])
+  PArrays.toc!(t,"FESpaces")
 
   # FE Affine Operator
   mytic!(t,comm)
-  op = AffineFEOperator(a,l,U,V)
-  PArrays.toc!(t,"AffineFEOperator")
+  a((uh,ph,lh),(vh,qh,mh)) = ∫( vh⋅uh - (∇⋅vh)*ph - ∇(qh)⋅uh )dΩ +
+                            ∫((vh⋅n)*lh)d∂K +
+                            #∫(qh*(uh⋅n+τ*(ph-lh)*n⋅no))*d∂K
+                            ∫(qh*(uh⋅n))d∂K +
+                            ∫(τ*qh*ph*(n⋅nₒ))d∂K -
+                            ∫(τ*qh*lh*(n⋅nₒ))d∂K +
+                            #∫(mh*(uh⋅n+τ*(ph-lh)*n⋅no))*d∂K
+                            ∫(mh*(uh⋅n))d∂K +
+                            ∫(τ*mh*ph*(n⋅nₒ))d∂K -
+                            ∫(τ*mh*lh*(n⋅nₒ))d∂K
+  l((vh,qh,mh)) = ∫( vh⋅f + qh*(∇⋅u))*dΩ
+  op=HybridAffineFEOperator((u,v)->(a(u,v),l(v)), X, Y, [1,2], [3])
+  PArrays.toc!(t,"HybridAffineFEOperator")
 
   # Linear Solver
   mytic!(t,comm)
-  ls = PETScLinearSolver()
-  fels = LinearFESolver(ls)
-  uh = solve(fels, op)
+  solver = PETScLinearSolver()
+  xh=solve(solver,op)
   PArrays.toc!(t,"Solve")
 
   # Error norms and print solution
   mytic!(t,comm)
-  dΩ=Measure(trian,2*order)
-  e = u-uh
-  e_l2 = sum(∫(e*e)dΩ)
+  uh,_=xh
+  e = u -uh
+  e_l2=sqrt(sum(∫(e⋅e)dΩ))
   PArrays.toc!(t,"L2Norm")
 
   map_main(get_part_ids(model.models)) do part
     println("$(e_l2)\n")
   end
 
-  ngdofs  = length(V.gids)
+  ngdofs  = length(Y.gids)
   ngcells = length(model.gids)
   ngcells, ngdofs, e_l2
 end
@@ -88,7 +135,7 @@ function generate_model_cartesian(parts,subdomains,partition)
   model = CartesianDiscreteModel(parts, domain, partition)
 end
 
-function main_cartesian(parts,subdomains,partition,solver,title,ir,order=1)
+function main_cartesian(parts,subdomains,partition,title,ir,order=1)
   t = PArrays.PTimer(parts,verbose=true)
   PArrays.tic!(t)
   model=generate_model_cartesian(parts,subdomains,partition)
@@ -101,12 +148,11 @@ function main_cartesian(parts,subdomains,partition,solver,title,ir,order=1)
     merge!(out,data)
     out["d"] = length(subdomains)
     out["mesh"] = "cartesian"
-    out["solver"] = solver
     out["enorm"] = enorm
     out["nparts"] = nparts
     out["ngdofs"] = ngdofs
     out["ngcells"] = ngcells
-    out["ls"] = partition[1]/subdomains[1] 
+    out["ls"] = partition[1]/subdomains[1]
     out["nc"] = partition
     out["np"] = subdomains
     out["ir"] = ir
@@ -114,49 +160,8 @@ function main_cartesian(parts,subdomains,partition,solver,title,ir,order=1)
   end
 end
 
-function generate_model_p4est(parts,subdomains,numrefs)
-  d = length(subdomains)
-  domain = Vector{Float64}(undef, 2*d)
-  for i = 1:2:2 * d
-    domain[i]=0
-    domain[i+1]=1
-  end
-  domain = Tuple(domain)
-  coarse_model = CartesianDiscreteModel(domain,subdomains)
-  model = UniformlyRefinedForestOfOctreesDiscreteModel(parts,coarse_model,numrefs)
-end
-
-function main_p4est(parts,subdomains,numrefs,solver,title,ir,order=1)
-  t = PArrays.PTimer(parts,verbose=true)
-  PArrays.tic!(t)
-  model=generate_model_p4est(parts,subdomains,numrefs)
-  PArrays.toc!(t,"Model")
-  ngcells, ngdofs, enorm = _from_setup_fe_space_to_the_end(t,model,order)
-  display(t)
-  nparts = length(parts)
-  map_main(t.data) do data
-    out = Dict{String,Any}()
-    merge!(out,data)
-    out["d"] = length(subdomains)
-    out["mesh"] = "p4est"
-    out["solver"] = solver
-    out["enorm"] = enorm
-    out["nparts"] = nparts
-    out["ngdofs"] = ngdofs
-    out["ngcells"] = ngcells
-    out["ls"] = 2^numrefs 
-    out["nc"] = map(x->2^numrefs*x,subdomains)
-    out["np"] = subdomains
-    out["ir"] = ir
-    save("$title.bson",out)
-  end
-end
-
 ########
-
 function main(;
-  mesh::Symbol,
-  solver::Symbol,
   np::Tuple,
   nr::Integer,
   title::AbstractString,
@@ -165,53 +170,22 @@ function main(;
   k::Integer=1,
   verbose::Bool=true)
 
-  mesh   in (:cartesian,:p4est) || throw(ArgumentError("mesh should be :cartesian or :p4est"))
-  solver in (:gamg,:mumps)      || throw(ArgumentError("solver should be :gamg or :mumps"))
-
   # Process parameters of mesh
-  if mesh == :p4est
-    numrefs>=1 || throw(ArgumentError("numrefs should be larger or equal than 1"))
-  end
   length(np) == length(nc) || throw(ArgumentError("np and nc must be of same length"))
   all(nc .> 0) || throw(ArgumentError("all values in nc should be larger than 0"))
 
-  if solver == :gamg
-    options=petsc_gamg_options()
-  else
-    #options=petsc_mumps_options()
-  end
+  options=petsc_gamg_options()
 
-  if mesh == :p4est
-    prun(mpi,prod(np)) do parts
-      for ir in 1:nr
-        GridapPETSc.with(args=split(options)) do
-           str_r   = lpad(ir,ceil(Int,log10(nr)),'0')
-           title_r = "$(title)_ir$(str_r)"
-           main_p4est(parts,np,numrefs,string(solver),title_r,ir,1)
-           GridapPETSc.gridap_petsc_gc()
-        end
-      end
-    end
-  else
-    prun(mpi,np) do parts
-      for ir in 1:nr
-        GridapPETSc.with(args=split(options)) do
-           str_r   = lpad(ir,ceil(Int,log10(nr)),'0')
-           title_r = "$(title)_ir$(str_r)"
-           main_cartesian(parts,np,nc,string(solver),title_r,ir,1)
-           GridapPETSc.gridap_petsc_gc()
-        end
+  prun(mpi,np) do parts
+    for ir in 1:nr
+      GridapPETSc.with(args=split(options)) do
+          str_r   = lpad(ir,ceil(Int,log10(nr)),'0')
+          title_r = "$(title)_ir$(str_r)"
+          main_cartesian(parts,np,nc,title_r,ir,1)
+          GridapPETSc.gridap_petsc_gc()
       end
     end
   end
 end
 
-#   GridapDistributedPETScWrappers.C.PCFactorGetMatrix(pc[],mumpsmat)
-#   MatMumpsSetIcntl(mumpsmat[],4 ,2)     # level of printing (0 to 4)
-#   MatMumpsSetIcntl(mumpsmat[],28,2)     # use 1 for sequential analysis and ictnl(7) ordering,
-#                                       # or 2 for parallel analysis and ictnl(29) ordering
-#   MatMumpsSetIcntl(mumpsmat[],29,2)     # parallel ordering 1 = ptscotch, 2 = parmetis
-#   MatMumpsSetCntl(mumpsmat[] ,3,1.0e-6)  # threshhold for row pivot detection
-#   GridapDistributedPETScWrappers.C.KSPSetUp(ksp[])
-# end
 end

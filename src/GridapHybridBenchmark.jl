@@ -4,7 +4,6 @@ using Gridap
 using GridapHybrid
 using GridapDistributed
 using GridapPETSc
-using GridapP4est
 using PartitionedArrays
 using FileIO
 using MPI

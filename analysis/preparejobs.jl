@@ -37,7 +37,7 @@ function jobdict(params)
   "projectdir" => driverdir(),
   "modules" => driverdir("modules.sh"),
   "title" => datadir(jobname(fparams)),
-  "sysimage" => driverdir("GridaHybridBenchmark.so")
+  "sysimage" => driverdir("GridapHybridBenchmark.so")
   )
 end
 
@@ -61,6 +61,7 @@ function generate_2d_dicts(lst_nodes,lst_ls,nr=10)
 end
 
 function generate_3d_dicts(lst_nodes,lst_ls,nr=10)
+   dicts = Dict[]
   d=3
   for node in lst_nodes
     px=4*node
@@ -80,7 +81,8 @@ function generate_3d_dicts(lst_nodes,lst_ls,nr=10)
   dicts
 end
 
-dicts=generate_2d_dicts(collect(3:8),[16,32,64,128,256,512])
+#dicts=generate_2d_dicts(collect(1:8),[16,32,64,128,256,512])
+dicts=generate_3d_dicts(collect(1:7),[4,8,16,32],5)
 template = read(projectdir("jobtemplate.sh"),String)
 for params in dicts
    fparams=convert_nc_np_to_prod(params)
